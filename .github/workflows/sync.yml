@@ -1,0 +1,68 @@
+name: 同步 CFBlog 上游源码
+
+on:
+  schedule:
+    - cron: '0 2 */5 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cfblog-source-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: jkjoy/cfblog
+  UPSTREAM_BRANCH: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 获取并比较上游提交
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || true
+          git fetch upstream "${UPSTREAM_BRANCH}" --tags
+          commit="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          old_commit="$(git show HEAD:upstream/.sync-info 2>/dev/null | sed -n 's/^commit=//p' | head -n 1 || true)"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          [[ "$old_commit" == "$commit" ]] && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: 导出上游源码
+        if: steps.upstream.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf upstream && mkdir -p upstream
+          git archive --format=tar "upstream/${UPSTREAM_BRANCH}" | tar -x -C upstream
+          version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' upstream/package.json | head -n 1 || true)"
+          version="${version:-unknown}"
+          commit="${{ steps.upstream.outputs.commit }}"
+          cat > upstream/.sync-info <<EOF
+          commit=${commit}
+          timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          upstream_url=https://github.com/${UPSTREAM_REPO}
+          upstream_branch=${UPSTREAM_BRANCH}
+          version=${version}
+          EOF
+          echo "version=$version" >> "$GITHUB_ENV"
+          echo "short_commit=${commit:0:7}" >> "$GITHUB_ENV"
+      - name: 提交源码镜像并创建标签
+        if: steps.upstream.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="mirror-source-v${version}-${short_commit}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add upstream
+          git commit -m "chore: mirror CFBlog source ${version} (${short_commit})"
+          git tag -a "$tag" -m "Mirror CFBlog source v${version} (${short_commit})"
+          git push origin HEAD
+          git push origin "$tag"
