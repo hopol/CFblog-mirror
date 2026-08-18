@@ -1,0 +1,444 @@
+import { Hono } from 'hono';
+import type { AppEnv, JWTPayload, Post } from '../types';
+import { authMiddleware, optionalAuthMiddleware, requireRole } from '../auth';
+import { clearPublicSiteCommonCache } from '../public-site/cache';
+import { canViewNonPublicContent, generateSlug, getSiteSettings, parsePageParam, parsePerPageParam } from '../utils';
+
+const pages = new Hono<AppEnv>();
+
+interface PageWithAuthorRow extends Post {
+  author_name: string | null;
+}
+
+export function normalizeMenuPriority(value: unknown): number {
+  const priority = Number(value);
+  if (!Number.isFinite(priority)) return 0;
+  return Math.max(0, Math.min(9999, Math.trunc(priority)));
+}
+
+function formatPageResponse(page: PageWithAuthorRow, baseUrl: string) {
+  return {
+    id: page.id,
+    date: page.created_at,
+    modified: page.updated_at,
+    slug: page.slug,
+    status: page.status,
+    type: 'page',
+    title: {
+      rendered: page.title
+    },
+    content: {
+      rendered: page.content || ''
+    },
+    excerpt: {
+      rendered: page.excerpt || ''
+    },
+    author: page.author_id,
+    author_name: page.author_name,
+    featured_media: page.featured_image || '',
+    comment_status: page.comment_status,
+    parent: page.parent_id || 0,
+    menu_hidden: Boolean(page.menu_hidden),
+    menu_priority: Number(page.menu_priority || 0),
+    _links: {
+      self: [{ href: `${baseUrl}/wp-json/wp/v2/pages/${page.id}` }],
+      collection: [{ href: `${baseUrl}/wp-json/wp/v2/pages` }]
+    }
+  };
+}
+
+// Get all pages
+pages.get('/', optionalAuthMiddleware, async (c) => {
+  try {
+    const settings = await getSiteSettings(c.env);
+    const baseUrl = settings.site_url || 'http://localhost:8787';
+    const user = c.get('user') as JWTPayload | undefined;
+
+    const url = new URL(c.req.url);
+    const perPage = parsePerPageParam(url.searchParams.get('per_page'), 20);
+    const page = parsePageParam(url.searchParams.get('page'));
+    const status = url.searchParams.get('status') || 'publish';
+    const search = url.searchParams.get('search')?.trim() || '';
+    const offset = (page - 1) * perPage;
+    const includeAllStatuses = status === 'all';
+
+    if ((includeAllStatuses || status !== 'publish') && !user) {
+      return c.json({ code: 'rest_not_logged_in', message: 'You are not currently logged in.' }, 401);
+    }
+
+    let query = `
+      SELECT p.*, u.username as author_name
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.post_type = 'page'
+    `;
+    const params: any[] = [];
+
+    if (!includeAllStatuses) {
+      query += ` AND p.status = ?`;
+      params.push(status);
+    }
+
+    if (search) {
+      query += ` AND (p.title LIKE ? OR p.content LIKE ? OR p.excerpt LIKE ? OR p.slug LIKE ?)`;
+      const pattern = `%${search}%`;
+      params.push(pattern, pattern, pattern, pattern);
+    }
+
+    if (user && !['administrator', 'editor'].includes(user.role)) {
+      query += ` AND p.author_id = ?`;
+      params.push(user.userId);
+    }
+
+    query += ` ORDER BY p.created_at DESC LIMIT ? OFFSET ?`;
+    params.push(perPage, offset);
+
+    const { results } = await c.env.DB.prepare(query).bind(...params).all<PageWithAuthorRow>();
+
+    // Get total count
+    let countQuery = `SELECT COUNT(*) as total FROM posts WHERE post_type = 'page'`;
+    const countParams: any[] = [];
+    if (!includeAllStatuses) {
+      countQuery += ` AND status = ?`;
+      countParams.push(status);
+    }
+    if (search) {
+      countQuery += ` AND (title LIKE ? OR content LIKE ? OR excerpt LIKE ? OR slug LIKE ?)`;
+      const pattern = `%${search}%`;
+      countParams.push(pattern, pattern, pattern, pattern);
+    }
+    if (user && !['administrator', 'editor'].includes(user.role)) {
+      countQuery += ` AND author_id = ?`;
+      countParams.push(user.userId);
+    }
+    const total = (await c.env.DB.prepare(countQuery).bind(...countParams).first<{ total: number }>())?.total || 0;
+
+    const totalPages = Math.ceil(total / perPage);
+
+    c.header('X-WP-Total', total.toString());
+    c.header('X-WP-TotalPages', totalPages.toString());
+
+    return c.json(results.map((p) => formatPageResponse(p, baseUrl)));
+  } catch (error: any) {
+    console.error('[DEBUG] Failed to get pages:', error);
+    return c.json({ code: 'rest_internal_error', message: error.message }, 500);
+  }
+});
+
+// Get single page
+pages.get('/:id', optionalAuthMiddleware, async (c) => {
+  const id = parseInt(c.req.param('id') || '');
+
+  try {
+    const settings = await getSiteSettings(c.env);
+    const baseUrl = settings.site_url || 'http://localhost:8787';
+    const user = c.get('user') as JWTPayload | undefined;
+
+    const page = await c.env.DB.prepare(`
+      SELECT p.*, u.username as author_name
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.id = ? AND p.post_type = 'page'
+    `).bind(id).first<PageWithAuthorRow>();
+
+    if (!page) {
+      return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
+    }
+
+    if (page.status !== 'publish' && !canViewNonPublicContent(user, page.author_id)) {
+      return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
+    }
+
+    return c.json(formatPageResponse(page, baseUrl));
+  } catch (error: any) {
+    console.error('[DEBUG] Failed to get page:', error);
+    return c.json({ code: 'rest_internal_error', message: error.message }, 500);
+  }
+});
+
+// Create page (requires editor permissions)
+pages.post('/', authMiddleware, requireRole('administrator', 'editor'), async (c) => {
+  const user = c.get('user');
+
+  try {
+    const settings = await getSiteSettings(c.env);
+    const baseUrl = settings.site_url || 'http://localhost:8787';
+
+    const { title, content, excerpt, slug, status, parent, comment_status, menu_hidden, menu_priority } = await c.req.json();
+
+    if (!title) {
+      return c.json({ code: 'rest_missing_callback_param', message: 'Missing parameter: title' }, 400);
+    }
+
+    // Generate slug if not provided
+    const pageSlug = slug && slug.trim() ? slug.trim() : generateSlug(title);
+
+    // Check if slug already exists
+    const existingPage = await c.env.DB.prepare(`
+      SELECT id FROM posts WHERE slug = ? AND post_type = 'page'
+    `).bind(pageSlug).first<{ id: number }>();
+
+    if (existingPage) {
+      return c.json({
+        code: 'rest_slug_exists',
+        message: 'A page with this slug already exists.'
+      }, 400);
+    }
+
+    const now = new Date().toISOString();
+    const pageStatus = status || 'draft';
+    const publishedAt = pageStatus === 'publish' ? now : null;
+
+    const result = await c.env.DB.prepare(`
+      INSERT INTO posts (
+        title, content, excerpt, slug, status, post_type, author_id,
+        parent_id, comment_status, menu_hidden, menu_priority, created_at, updated_at, published_at
+      )
+      VALUES (?, ?, ?, ?, ?, 'page', ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      title,
+      content || '',
+      excerpt || '',
+      pageSlug,
+      pageStatus,
+      user.userId,
+      parent || 0,
+      comment_status || 'open',
+      menu_hidden ? 1 : 0,
+      normalizeMenuPriority(menu_priority),
+      now,
+      now,
+      publishedAt
+    ).run();
+
+    const newPage = await c.env.DB.prepare(`
+      SELECT p.*, u.username as author_name
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.id = ?
+    `).bind(result.meta.last_row_id).first<PageWithAuthorRow>();
+
+    if (!newPage) {
+      return c.json({ code: 'rest_page_invalid', message: 'Failed to create page.' }, 500);
+    }
+
+    await clearPublicSiteCommonCache(c.env, c.req.url);
+    return c.json(formatPageResponse(newPage, baseUrl), 201);
+  } catch (error: any) {
+    console.error('[DEBUG] Failed to create page:', error);
+    return c.json({ code: 'rest_internal_error', message: error.message }, 500);
+  }
+});
+
+// Update page
+pages.put('/:id', authMiddleware, requireRole('administrator', 'editor'), async (c) => {
+  const id = parseInt(c.req.param('id') || '');
+
+  try {
+    const settings = await getSiteSettings(c.env);
+    const baseUrl = settings.site_url || 'http://localhost:8787';
+
+    const { title, content, excerpt, slug, status, parent, comment_status, menu_hidden, menu_priority } = await c.req.json();
+
+    const existingPage = await c.env.DB.prepare(`
+      SELECT * FROM posts WHERE id = ? AND post_type = 'page'
+    `).bind(id).first<Post>();
+
+    if (!existingPage) {
+      return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
+    }
+
+    const updates: string[] = ['updated_at = ?'];
+    const params: any[] = [new Date().toISOString()];
+
+    if (title !== undefined) {
+      updates.push('title = ?');
+      params.push(title);
+    }
+
+    if (content !== undefined) {
+      updates.push('content = ?');
+      params.push(content);
+    }
+
+    if (excerpt !== undefined) {
+      updates.push('excerpt = ?');
+      params.push(excerpt);
+    }
+
+    if (slug !== undefined && slug.trim()) {
+      // Check if slug already exists for other pages
+      const slugExists = await c.env.DB.prepare(`
+        SELECT id FROM posts WHERE slug = ? AND id != ? AND post_type = 'page'
+      `).bind(slug.trim(), id).first<{ id: number }>();
+
+      if (slugExists) {
+        return c.json({
+          code: 'rest_slug_exists',
+          message: 'A page with this slug already exists.'
+        }, 400);
+      }
+
+      updates.push('slug = ?');
+      params.push(slug.trim());
+    }
+
+    if (status !== undefined) {
+      updates.push('status = ?');
+      params.push(status);
+
+      // Update published_at if status changes to publish
+      if (status === 'publish' && existingPage.status !== 'publish') {
+        updates.push('published_at = ?');
+        params.push(new Date().toISOString());
+      }
+    }
+
+    if (parent !== undefined) {
+      updates.push('parent_id = ?');
+      params.push(parent);
+    }
+
+    if (comment_status !== undefined) {
+      updates.push('comment_status = ?');
+      params.push(comment_status);
+    }
+
+    if (menu_hidden !== undefined) {
+      updates.push('menu_hidden = ?');
+      params.push(menu_hidden ? 1 : 0);
+    }
+
+    if (menu_priority !== undefined) {
+      updates.push('menu_priority = ?');
+      params.push(normalizeMenuPriority(menu_priority));
+    }
+
+    const updateQuery = `UPDATE posts SET ${updates.join(', ')} WHERE id = ?`;
+    params.push(id);
+
+    await c.env.DB.prepare(updateQuery).bind(...params).run();
+
+    const updatedPage = await c.env.DB.prepare(`
+      SELECT p.*, u.username as author_name
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.id = ?
+    `).bind(id).first<PageWithAuthorRow>();
+
+    if (!updatedPage) {
+      return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
+    }
+
+    await clearPublicSiteCommonCache(c.env, c.req.url);
+    return c.json(formatPageResponse(updatedPage, baseUrl));
+  } catch (error: any) {
+    console.error('[DEBUG] Failed to update page:', error);
+    return c.json({ code: 'rest_internal_error', message: error.message }, 500);
+  }
+});
+
+// Restore page from trash
+pages.post('/:id/restore', authMiddleware, requireRole('administrator', 'editor'), async (c) => {
+  const id = parseInt(c.req.param('id') || '');
+
+  try {
+    const settings = await getSiteSettings(c.env);
+    const baseUrl = settings.site_url || 'http://localhost:8787';
+    const page = await c.env.DB.prepare(`
+      SELECT * FROM posts WHERE id = ? AND post_type = 'page'
+    `).bind(id).first<Post>();
+
+    if (!page) {
+      return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
+    }
+    if (page.status !== 'trash') {
+      return c.json({ code: 'rest_invalid_param', message: 'Page is not in trash.' }, 400);
+    }
+
+    const previousStatus = await c.env.DB.prepare(
+      'SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ? ORDER BY id DESC LIMIT 1'
+    ).bind(id, '_previous_status').first<{ meta_value: string | null }>();
+    const allowedStatuses = new Set(['publish', 'draft', 'pending', 'private']);
+    const status = previousStatus?.meta_value && allowedStatuses.has(previousStatus.meta_value)
+      ? previousStatus.meta_value
+      : 'draft';
+
+    await c.env.DB.prepare('UPDATE posts SET status = ?, updated_at = ? WHERE id = ?')
+      .bind(status, new Date().toISOString(), id)
+      .run();
+
+    const restoredPage = await c.env.DB.prepare(`
+      SELECT p.*, u.username as author_name
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.id = ? AND p.post_type = 'page'
+    `).bind(id).first<PageWithAuthorRow>();
+
+    await clearPublicSiteCommonCache(c.env, c.req.url);
+    return c.json(formatPageResponse(restoredPage!, baseUrl));
+  } catch (error: any) {
+    return c.json({ code: 'rest_internal_error', message: error.message }, 500);
+  }
+});
+
+// Delete page
+pages.delete('/:id', authMiddleware, requireRole('administrator', 'editor'), async (c) => {
+  const id = parseInt(c.req.param('id') || '');
+  const force = c.req.query('force') === 'true';
+
+  try {
+    const settings = await getSiteSettings(c.env);
+    const baseUrl = settings.site_url || 'http://localhost:8787';
+
+    const page = await c.env.DB.prepare(`
+      SELECT * FROM posts WHERE id = ? AND post_type = 'page'
+    `).bind(id).first<Post>();
+
+    if (!page) {
+      return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
+    }
+
+    if (force) {
+      // Permanently delete
+      await c.env.DB.prepare('DELETE FROM post_meta WHERE post_id = ?').bind(id).run();
+      await c.env.DB.prepare(`
+        DELETE FROM posts WHERE id = ?
+      `).bind(id).run();
+
+      await clearPublicSiteCommonCache(c.env, c.req.url);
+      return c.json({ deleted: true, previous: page });
+    } else {
+      await c.env.DB.prepare('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?')
+        .bind(id, '_previous_status')
+        .run();
+      await c.env.DB.prepare('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)')
+        .bind(id, '_previous_status', page.status)
+        .run();
+
+      // Move to trash
+      await c.env.DB.prepare(`
+        UPDATE posts SET status = 'trash', updated_at = ? WHERE id = ?
+      `).bind(new Date().toISOString(), id).run();
+
+      const trashedPage = await c.env.DB.prepare(`
+        SELECT * FROM posts WHERE id = ?
+      `).bind(id).first<Post>();
+
+      if (!trashedPage) {
+        return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
+      }
+
+      await clearPublicSiteCommonCache(c.env, c.req.url);
+      return c.json({
+        id: trashedPage.id,
+        status: trashedPage.status
+      });
+    }
+  } catch (error: any) {
+    console.error('[DEBUG] Failed to delete page:', error);
+    return c.json({ code: 'rest_internal_error', message: error.message }, 500);
+  }
+});
+
+export default pages;

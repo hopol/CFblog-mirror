@@ -1,0 +1,69 @@
+# Database Migrations
+
+这个目录包含了数据库迁移脚本，用于在不丢失现有数据的情况下更新数据库结构。
+
+## 迁移文件列表
+
+- `0001_add_sticky_to_posts.sql` - ✅ 已应用 - 为 posts 表添加 sticky 字段，用于支持文章置顶功能
+- `0006_add_gravatar_base_url.sql` - 为站点设置增加可配置的 Gravatar 镜像地址
+- `0007_normalize_media_urls.sql` - 将媒体地址转换为不含域名的相对路径
+- `0008_add_resend_api_key_setting.sql` - 在受保护的站点设置中保存 Resend API Key
+- `0011_add_site_theme_setting.sql` - 为博客前台增加可切换的内置主题设置
+- `0012_add_page_menu_fields.sql` - 为页面增加菜单隐藏与优先级设置
+
+## 如何应用迁移
+
+⚠️ **重要提示**：由于 Cloudflare D1 迁移系统的限制，建议使用 `execute` 命令而不是 `migrations apply`。
+
+仓库中的 GitHub Actions 也已经改为执行 `scripts/reconcile-remote-d1.mjs`，不再直接调用 `d1 migrations apply`。
+
+如果新增的是“需要兼容已有数据库状态”的迁移，请同步更新 `scripts/reconcile-remote-d1.mjs` 里的 `migrationPlan`，给它补一条检测和补偿规则。
+
+本地可以直接执行：
+
+```bash
+node ./scripts/reconcile-remote-d1.mjs cfblog-db --local
+```
+
+### 推荐方法：使用 execute 命令
+
+**本地环境：**
+```bash
+npx wrangler d1 execute cfblog-db --file=./migrations/0001_add_sticky_to_posts.sql --local
+```
+
+**生产环境：**
+```bash
+npx wrangler d1 execute cfblog-db --file=./migrations/0001_add_sticky_to_posts.sql --remote
+```
+
+### 验证迁移是否成功
+
+检查 sticky 字段是否存在：
+```bash
+npx wrangler d1 execute cfblog-db --command="PRAGMA table_info(posts);" --remote | grep sticky
+```
+
+检查索引是否创建：
+```bash
+npx wrangler d1 execute cfblog-db --command="SELECT name FROM sqlite_master WHERE type='index' AND name='idx_posts_sticky';" --remote
+```
+
+## 注意事项
+
+1. **不要修改已应用的迁移文件** - 已经应用到生产环境的迁移文件不应该被修改
+2. **按顺序编号** - 新迁移文件应该使用递增的编号（0002, 0003, etc.）
+3. **测试迁移** - 在应用到生产环境之前，先在本地或开发环境测试迁移
+4. **备份数据** - 在执行重要迁移之前，建议先备份数据库
+
+## 创建新迁移
+
+创建新迁移文件时，使用以下命名格式：
+
+```
+<序号>_<描述性名称>.sql
+```
+
+例如：
+- `0002_add_user_avatar.sql`
+- `0003_create_settings_table.sql`
