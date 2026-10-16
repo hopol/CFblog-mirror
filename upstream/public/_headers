@@ -1,0 +1,18 @@
+# Static assets bypass the Worker (run_worker_first = false), so the security headers
+# added by the Worker middleware in src/index.ts are mirrored here.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: camera=(), geolocation=(), microphone=()
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+
+/_cfblog/admin/*
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'self'; img-src 'self' data: https:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'
+
+/assets/font/*
+  Cache-Control: public, max-age=2592000
+
+/assets/images/*
+  Cache-Control: public, max-age=86400

@@ -235,6 +235,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_type ON posts(post_type);
 CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug);
 CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(published_at);
 CREATE INDEX IF NOT EXISTS idx_posts_sticky ON posts(sticky);
+CREATE INDEX IF NOT EXISTS idx_posts_type_status_date ON posts(post_type, status, COALESCE(published_at, created_at));
+CREATE INDEX IF NOT EXISTS idx_posts_type_status_sticky_date ON posts(post_type, status, sticky, COALESCE(published_at, created_at));
 CREATE INDEX IF NOT EXISTS idx_posts_featured_media ON posts(featured_media_id);
 CREATE INDEX IF NOT EXISTS idx_posts_featured_image_url ON posts(featured_image_url);
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);

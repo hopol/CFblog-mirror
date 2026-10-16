@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { getNavPages } from '../src/public-site';
-import { clearPublicSiteCommonCache } from '../src/public-site/cache';
 import { normalizeMenuPriority } from '../src/routes/pages';
 import type { Env } from '../src/types';
 
@@ -40,20 +39,5 @@ describe('page menu settings', () => {
     expect(preparedSql).toContain('COALESCE(menu_hidden, 0) = 0');
     expect(preparedSql).toContain('ORDER BY COALESCE(menu_priority, 0) DESC');
     expect(preparedSql).not.toContain('LIMIT 4');
-  });
-
-  it('clears the cached navigation data after a page change', async () => {
-    const deletedKeys: string[] = [];
-    const env = {
-      CACHE: {
-        async delete(key: string) {
-          deletedKeys.push(key);
-        },
-      },
-    } as unknown as Env;
-
-    await clearPublicSiteCommonCache(env, 'https://blog.example/wp-json/wp/v2/pages/12');
-
-    expect(deletedKeys).toEqual(['cfblog:v4:public:common:https://blog.example']);
   });
 });

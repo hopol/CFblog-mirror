@@ -290,6 +290,20 @@ const migrationPlan = [
       }
     },
   },
+  {
+    id: '0013_add_post_listing_indexes.sql',
+    description: 'composite indexes for public post listings',
+    isSatisfied() {
+      return (
+        indexExists('idx_posts_type_status_date') &&
+        indexExists('idx_posts_type_status_sticky_date')
+      );
+    },
+    reconcile() {
+      console.log(`Applying compatibility migration ${this.id}...`);
+      executeFile(`migrations/${this.id}`);
+    },
+  },
 ];
 
 function main() {

@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import type { AppEnv, JWTPayload, Post } from '../types';
 import { authMiddleware, optionalAuthMiddleware, requireRole } from '../auth';
-import { clearPublicSiteCommonCache } from '../public-site/cache';
 import { canViewNonPublicContent, generateSlug, getSiteSettings, parsePageParam, parsePerPageParam } from '../utils';
 
 const pages = new Hono<AppEnv>();
@@ -222,7 +221,6 @@ pages.post('/', authMiddleware, requireRole('administrator', 'editor'), async (c
       return c.json({ code: 'rest_page_invalid', message: 'Failed to create page.' }, 500);
     }
 
-    await clearPublicSiteCommonCache(c.env, c.req.url);
     return c.json(formatPageResponse(newPage, baseUrl), 201);
   } catch (error: any) {
     console.error('[DEBUG] Failed to create page:', error);
@@ -330,7 +328,6 @@ pages.put('/:id', authMiddleware, requireRole('administrator', 'editor'), async 
       return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
     }
 
-    await clearPublicSiteCommonCache(c.env, c.req.url);
     return c.json(formatPageResponse(updatedPage, baseUrl));
   } catch (error: any) {
     console.error('[DEBUG] Failed to update page:', error);
@@ -375,7 +372,6 @@ pages.post('/:id/restore', authMiddleware, requireRole('administrator', 'editor'
       WHERE p.id = ? AND p.post_type = 'page'
     `).bind(id).first<PageWithAuthorRow>();
 
-    await clearPublicSiteCommonCache(c.env, c.req.url);
     return c.json(formatPageResponse(restoredPage!, baseUrl));
   } catch (error: any) {
     return c.json({ code: 'rest_internal_error', message: error.message }, 500);
@@ -406,7 +402,6 @@ pages.delete('/:id', authMiddleware, requireRole('administrator', 'editor'), asy
         DELETE FROM posts WHERE id = ?
       `).bind(id).run();
 
-      await clearPublicSiteCommonCache(c.env, c.req.url);
       return c.json({ deleted: true, previous: page });
     } else {
       await c.env.DB.prepare('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?')
@@ -429,7 +424,6 @@ pages.delete('/:id', authMiddleware, requireRole('administrator', 'editor'), asy
         return c.json({ code: 'rest_page_invalid', message: 'Invalid page ID.' }, 404);
       }
 
-      await clearPublicSiteCommonCache(c.env, c.req.url);
       return c.json({
         id: trashedPage.id,
         status: trashedPage.status

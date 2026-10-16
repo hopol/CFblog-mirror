@@ -10,6 +10,7 @@
 - `0008_add_resend_api_key_setting.sql` - 在受保护的站点设置中保存 Resend API Key
 - `0011_add_site_theme_setting.sql` - 为博客前台增加可切换的内置主题设置
 - `0012_add_page_menu_fields.sql` - 为页面增加菜单隐藏与优先级设置
+- `0013_add_post_listing_indexes.sql` - 为前台文章列表查询增加组合索引
 
 ## 如何应用迁移
 

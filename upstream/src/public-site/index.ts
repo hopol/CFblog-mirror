@@ -8,8 +8,8 @@ import { buildGravatarUrl, getSiteSettings, md5, normalizeBaseUrl } from '../uti
 import { PUBLIC_SITE_CSS, PUBLIC_SITE_JS } from './assets';
 import {
   buildPublicCacheKey,
+  getCachedJson,
   PUBLIC_COMMON_CACHE_TTL_SECONDS,
-  PUBLIC_KV_CACHE_VERSION,
   PUBLIC_RSS_CACHE_TTL_SECONDS,
   PUBLIC_SITEMAP_CACHE_TTL_SECONDS,
 } from './cache';
@@ -277,29 +277,10 @@ const RESERVED_NAV_SLUGS = new Set([
 ]);
 
 const RSS_FEED_LIMIT = 50;
-async function getKvJson<T>(
-  env: Env,
-  key: string,
-  ttlSeconds: number,
-  loader: () => Promise<T>,
-): Promise<T> {
-  if (!env.CACHE) {
-    return loader();
-  }
-
-  const cached = await env.CACHE.get(key, 'json');
-  if (cached !== null) {
-    return cached as T;
-  }
-
-  const value = await loader();
-  await env.CACHE.put(key, JSON.stringify(value), { expirationTtl: ttlSeconds });
-  return value;
-}
+// Bump when PUBLIC_SITE_CSS or PUBLIC_SITE_JS changes so browsers refetch them.
+const PUBLIC_ASSET_VERSION = 'v4';
 
 export function registerPublicSiteRoutes(app: AppRouter): void {
-  app.get('/favicon.ico', servePublicAsset);
-
   app.get('/_cfblog/style.css', (c) => {
     return c.text(PUBLIC_SITE_CSS, 200, {
       'Cache-Control': 'public, max-age=3600',
@@ -327,10 +308,6 @@ export function registerPublicSiteRoutes(app: AppRouter): void {
   app.get('/talking', renderMomentsPage);
   app.get('/moments', renderMomentsPage);
   app.get('/:slug', renderContentBySlug);
-}
-
-async function servePublicAsset(c: AppContext): Promise<Response> {
-  return c.env.ASSETS.fetch(c.req.raw);
 }
 
 export async function renderPublicHome(c: AppContext): Promise<Response> {
@@ -380,7 +357,7 @@ export async function renderPublicHome(c: AppContext): Promise<Response> {
 
 async function renderRssFeed(c: AppContext): Promise<Response> {
   const site = await getCachedSiteMeta(c.env, c.req.url);
-  const items = await getKvJson(
+  const items = await getCachedJson(
     c.env,
     buildPublicCacheKey(c.req.url, 'rss-items'),
     PUBLIC_RSS_CACHE_TTL_SECONDS,
@@ -412,7 +389,7 @@ async function serveRobotsTxt(c: AppContext): Promise<Response> {
 
 async function serveSitemapXml(c: AppContext): Promise<Response> {
   const site = await getCachedSiteMeta(c.env, c.req.url);
-  const entries = await getKvJson(
+  const entries = await getCachedJson(
     c.env,
     buildPublicCacheKey(c.req.url, 'sitemap-entries'),
     PUBLIC_SITEMAP_CACHE_TTL_SECONDS,
@@ -565,7 +542,7 @@ async function renderTagPage(c: AppContext): Promise<Response> {
 
 async function renderLinksPage(c: AppContext): Promise<Response> {
   const common = await getCommonSiteData(c.env, c.req.url);
-  const groups = await getKvJson(
+  const groups = await getCachedJson(
     c.env,
     buildPublicCacheKey(c.req.url, 'link-groups'),
     PUBLIC_COMMON_CACHE_TTL_SECONDS,
@@ -867,7 +844,7 @@ async function getCachedArchivePosts(
     return getArchivePosts(env, site, options);
   }
 
-  return getKvJson(
+  return getCachedJson(
     env,
     buildPublicCacheKey(requestUrl, 'archive-posts', options),
     PUBLIC_COMMON_CACHE_TTL_SECONDS,
@@ -876,7 +853,7 @@ async function getCachedArchivePosts(
 }
 
 async function getCommonSiteData(env: Env, requestUrl: string): Promise<CommonSiteData> {
-  return getKvJson(
+  return getCachedJson(
     env,
     buildPublicCacheKey(requestUrl, 'common'),
     PUBLIC_COMMON_CACHE_TTL_SECONDS,
@@ -903,7 +880,7 @@ async function getCommonSiteData(env: Env, requestUrl: string): Promise<CommonSi
 }
 
 async function getCachedSiteMeta(env: Env, requestUrl: string): Promise<SiteMeta> {
-  return getKvJson(
+  return getCachedJson(
     env,
     buildPublicCacheKey(requestUrl, 'site-meta'),
     PUBLIC_COMMON_CACHE_TTL_SECONDS,
@@ -1330,11 +1307,13 @@ async function getCachedPostList(
     return getPostList(env, site, options);
   }
 
-  return getKvJson(
+  return getCachedJson(
     env,
     buildPublicCacheKey(requestUrl, 'post-list', options),
     PUBLIC_COMMON_CACHE_TTL_SECONDS,
     () => getPostList(env, site, options),
+    // Out-of-range pages are clamped to the last page; don't let arbitrary ?page= values fill the cache.
+    (result) => result.pagination.page === options.page,
   );
 }
 
@@ -1353,7 +1332,7 @@ async function getCachedCategoryBySlug(
   requestUrl: string,
   slug: string,
 ): Promise<TaxonomyItem | null> {
-  return getKvJson(
+  return getCachedJson(
     env,
     buildPublicCacheKey(requestUrl, 'category', slug),
     PUBLIC_COMMON_CACHE_TTL_SECONDS,
@@ -1376,7 +1355,7 @@ async function getCachedTagBySlug(
   requestUrl: string,
   slug: string,
 ): Promise<TaxonomyItem | null> {
-  return getKvJson(
+  return getCachedJson(
     env,
     buildPublicCacheKey(requestUrl, 'tag', slug),
     PUBLIC_COMMON_CACHE_TTL_SECONDS,
@@ -1808,7 +1787,7 @@ function renderLayout(input: {
     `${input.common.site.title} RSS`,
   )}" href="${escapeAttribute(rssUrl)}">
   <link rel="stylesheet" href="/_cfblog/vh-theme.css">
-  <link rel="stylesheet" href="/_cfblog/style.css?v=${PUBLIC_KV_CACHE_VERSION}">
+  <link rel="stylesheet" href="/_cfblog/style.css?v=${PUBLIC_ASSET_VERSION}">
   ${
     input.common.site.faviconUrl
       ? `<link rel="icon" href="${escapeAttribute(input.common.site.faviconUrl)}">`
@@ -1846,7 +1825,7 @@ function renderLayout(input: {
   ${renderFooter(input.common)}
   ${renderSearchDialog(input.common.recentPosts)}
   <script src="/assets/js/vhCaiqi.js" defer></script>
-  <script type="module" src="/_cfblog/app.js?v=${PUBLIC_KV_CACHE_VERSION}"></script>
+  <script type="module" src="/_cfblog/app.js?v=${PUBLIC_ASSET_VERSION}"></script>
 </body>
 </html>`;
 }

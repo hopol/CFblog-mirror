@@ -8,7 +8,6 @@ GitHub Actions 不会自动创建 Cloudflare 资源。首次部署前需要在�
 
 - D1 数据库，默认名称为 `cfblog-db`
 - R2 存储桶，默认名称为 `cfblog-media`
-- KV 命名空间，绑定名称为 `CACHE`
 - Workers AI 访问能力
 
 可以使用 Wrangler 创建主要资源：
@@ -16,7 +15,6 @@ GitHub Actions 不会自动创建 Cloudflare 资源。首次部署前需要在�
 ```bash
 npx wrangler d1 create cfblog-db
 npx wrangler r2 bucket create cfblog-media
-npx wrangler kv namespace create CACHE
 ```
 
 创建完成后，检查 `wrangler.toml`：
@@ -24,9 +22,10 @@ npx wrangler kv namespace create CACHE
 - `name` 是要部署的 Worker 名称
 - D1 的 `database_id` 属于目标账号
 - R2 的 `bucket_name` 与已创建的存储桶一致
-- KV 的 `id` 与已创建的命名空间一致
 
 仓库中的资源 ID 只适用于其原始 Cloudflare 账号。Fork 或部署到其他账号时必须替换。
+
+前台数据缓存使用 Worker 内存和 Cache API，不再需要 KV。Cache API 只在自定义域名上生效，`*.workers.dev` 域名下只有单个实例内的内存缓存，建议生产环境绑定自定义域名。
 
 ## 创建 Cloudflare API Token
 
@@ -141,7 +140,7 @@ npx wrangler secret list
 
 确认 `wrangler.toml` 中的 `database_name`、`database_id` 和 `CLOUDFLARE_ACCOUNT_ID` 属于同一个账号。
 
-### R2 或 KV 绑定失败
+### R2 绑定失败
 
 工作流不会创建绑定资源。先在 Cloudflare 中创建资源，再更新 `wrangler.toml` 中的名称或 ID。
 
