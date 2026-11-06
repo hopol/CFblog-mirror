@@ -238,19 +238,26 @@ users.post('/register', async (c) => {
       return createWPError('registration_closed', 'Public registration is closed.', 403);
     }
 
-    const userRole = isFirstUser ? 'administrator' : 'subscriber';
+    const userRole = 'administrator';
 
     // Hash password
     const hashedPassword = await hashPassword(password);
 
     const now = new Date().toISOString();
 
-    // Create user
+    // Claim bootstrap registration atomically, including requests that passed
+    // the empty-table check before another request finished hashing.
     const result = await c.env.DB.prepare(
-      'INSERT INTO users (username, email, password, display_name, role, status, registered_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      `INSERT INTO users (username, email, password, display_name, role, status, registered_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM users)`
     )
       .bind(username, email, hashedPassword, display_name || username, userRole, 'active', now)
       .run();
+
+    if (result.meta.changes !== 1) {
+      return createWPError('registration_closed', 'Public registration is closed.', 403);
+    }
 
     const userId = result.meta.last_row_id;
 

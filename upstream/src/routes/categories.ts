@@ -344,18 +344,22 @@ categories.delete('/:id', authMiddleware, requireRole('administrator', 'editor')
     }
 
     if (force) {
-      // Delete category and reassign posts to default category
-      await c.env.DB.prepare(
-        'UPDATE post_categories SET category_id = 1 WHERE category_id = ?'
-      )
-        .bind(id)
-        .run();
-
-      await c.env.DB.prepare('UPDATE categories SET parent_id = ? WHERE parent_id = ?')
-        .bind(category.parent_id || 0, id)
-        .run();
-
-      await c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run();
+      // Merge memberships before deleting so posts already in the default category stay unique.
+      await c.env.DB.batch([
+        c.env.DB.prepare(`
+          INSERT OR IGNORE INTO post_categories (post_id, category_id)
+          SELECT post_id, 1 FROM post_categories WHERE category_id = ?
+        `).bind(id),
+        c.env.DB.prepare('DELETE FROM post_categories WHERE category_id = ?').bind(id),
+        c.env.DB.prepare('UPDATE categories SET parent_id = ? WHERE parent_id = ?')
+          .bind(category.parent_id || 0, id),
+        c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id),
+        c.env.DB.prepare(`
+          UPDATE categories
+          SET count = (SELECT COUNT(*) FROM post_categories WHERE category_id = 1)
+          WHERE id = 1
+        `)
+      ]);
 
       return c.json({ deleted: true, previous: formatCategoryResponse(category, baseUrl) });
     } else {

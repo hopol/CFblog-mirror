@@ -16,14 +16,13 @@ import { computed, reactive, ref } from 'vue';
 import { ApiError, apiFetch, apiJson } from '../api/client';
 import { useAdminI18n } from '../i18n';
 import { useAuthStore } from '../stores/auth';
+import { createImportBatches, toArray, type ImportPackage } from '../import-batches';
 
 type ConflictStrategy = 'update' | 'skip' | 'duplicate';
-interface ImportPackage { format?: string; version?: string; source?: Record<string, unknown> | null; categories?: unknown[]; tags?: unknown[]; content?: Array<{ type?: string }>; moments?: unknown[] }
 interface ImportSummary { total_content_items?: number; total_moment_items?: number; posts_detected?: number; pages_detected?: number; moments_detected?: number; created?: number; updated?: number; skipped?: number; failed?: number; categories_created?: number; categories_matched?: number; tags_created?: number; tags_matched?: number }
 interface ImportIssue { level: 'warning' | 'error'; scope: string; identifier: string; message: string }
 interface ImportResult { success: boolean; dry_run: boolean; format?: string; version?: string; strategy?: string; source?: Record<string, unknown> | null; summary: ImportSummary; issues: ImportIssue[] }
 
-const BATCH_SIZE = 20;
 const auth = useAuthStore();
 const dialog = useDialog();
 const message = useMessage();
@@ -50,22 +49,6 @@ const summaryCards = computed(() => result.value ? [
   ['categories', t('importer.categories'), result.value.summary.categories_created || 0],
   ['tags', t('importer.tags'), result.value.summary.tags_created || 0],
 ] : []);
-
-function toArray(value: unknown) { return Array.isArray(value) ? value : []; }
-
-function createBatches(pkg: ImportPackage) {
-  const batches: ImportPackage[] = [];
-  const base = { format: pkg.format || 'cfblog-import', version: pkg.version || '1.1', source: pkg.source || null };
-  const content = toArray(pkg.content);
-  const moments = toArray(pkg.moments);
-  for (let start = 0; start < content.length; start += BATCH_SIZE) {
-    batches.push({ ...base, categories: batches.length ? [] : toArray(pkg.categories), tags: batches.length ? [] : toArray(pkg.tags), content: content.slice(start, start + BATCH_SIZE) as Array<{ type?: string }>, moments: [] });
-  }
-  for (let start = 0; start < moments.length; start += BATCH_SIZE) {
-    batches.push({ ...base, categories: [], tags: [], content: [], moments: moments.slice(start, start + BATCH_SIZE) });
-  }
-  return batches;
-}
 
 function createAggregate(pkg: ImportPackage): ImportResult {
   const content = toArray(pkg.content) as Array<{ type?: string }>;
@@ -120,7 +103,7 @@ async function executeImport() {
     message.error(t('importer.invalidJson'));
     return;
   }
-  const batches = createBatches(pkg);
+  const batches = createImportBatches(pkg);
   if (!batches.length) {
     message.error(t('importer.emptyPackage'));
     return;

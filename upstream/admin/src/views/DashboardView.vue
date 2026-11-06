@@ -15,19 +15,15 @@ import {
 } from '@lucide/vue';
 import { NButton, NIcon, NSpin, useMessage } from 'naive-ui';
 import { computed, onMounted, ref } from 'vue';
-import { apiFetch } from '../api/client';
+import { fetchDashboardStats, type StatKey } from '../api/dashboard';
 import { useAdminI18n } from '../i18n';
 import { useAuthStore } from '../stores/auth';
-
-type StatKey = 'posts' | 'pages' | 'comments' | 'categories' | 'tags' | 'media' | 'links' | 'users' | 'moments';
 
 const auth = useAuthStore();
 const message = useMessage();
 const { t } = useAdminI18n();
 const loading = ref(true);
-const stats = ref<Record<StatKey, number>>({
-  posts: 0, pages: 0, comments: 0, categories: 0, tags: 0, media: 0, links: 0, users: 0, moments: 0,
-});
+const stats = ref<Partial<Record<StatKey, number>>>({});
 
 const statDefinitions = computed(() => [
   { key: 'posts' as const, label: t('stats.posts'), icon: FileText, tone: 'blue' },
@@ -41,43 +37,15 @@ const statDefinitions = computed(() => [
   { key: 'moments' as const, label: t('stats.moments'), icon: Zap, tone: 'orange' },
 ]);
 
-const endpoints: Record<StatKey, string> = {
-  posts: '/posts?per_page=1&status=all',
-  pages: '/pages?per_page=1&status=all',
-  comments: '/comments?per_page=1&status=all',
-  categories: '/categories?per_page=1',
-  tags: '/tags?per_page=1',
-  media: '/media?per_page=1',
-  links: '/links?per_page=1&visible=all',
-  users: '/users?per_page=1',
-  moments: '/moments?per_page=1&status=all',
-};
-
-async function fetchCount(path: string) {
-  const response = await apiFetch(path, {}, auth.token);
-  const headerCount = Number(response.headers.get('X-WP-Total'));
-  if (Number.isFinite(headerCount)) return headerCount;
-  const data = await response.json();
-  return Array.isArray(data) ? data.length : 0;
-}
-
 async function loadStats(notify = false) {
   loading.value = true;
   try {
-    const entries = await Promise.all(
-      Object.entries(endpoints).map(async ([key, path]) => {
-        if (key === 'comments') {
-          const [postComments, momentComments] = await Promise.all([
-            fetchCount(path),
-            fetchCount('/moments/comments/all?per_page=1&status=all'),
-          ]);
-          return [key, postComments + momentComments] as const;
-        }
-        return [key, await fetchCount(path)] as const;
-      }),
-    );
-    stats.value = Object.fromEntries(entries) as Record<StatKey, number>;
-    if (notify) message.success(t('dashboard.refreshed'));
+    const result = await fetchDashboardStats(auth.user?.role || '', auth.token);
+    stats.value = result.counts;
+    if (result.failedKeys.length) {
+      const labels = result.failedKeys.map((key) => t(`stats.${key}`)).join(', ');
+      message.error(`${t('dashboard.loadFailed')}: ${labels}`);
+    } else if (notify) message.success(t('dashboard.refreshed'));
   } catch {
     message.error(t('dashboard.loadFailed'));
   } finally {
@@ -109,7 +77,7 @@ onMounted(() => loadStats());
           </span>
           <div>
             <span>{{ item.label }}</span>
-            <strong>{{ stats[item.key] }}</strong>
+            <strong>{{ stats[item.key] ?? '—' }}</strong>
           </div>
         </article>
       </div>

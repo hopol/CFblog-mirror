@@ -53,3 +53,19 @@ export async function apiJson<T>(
   const response = await apiFetch(path, init, token);
   return response.json() as Promise<T>;
 }
+
+export async function apiAllPages<T>(path: string, token = ''): Promise<T[]> {
+  const [pathname, query = ''] = path.split('?');
+  const params = new URLSearchParams(query);
+  params.set('per_page', '100');
+  params.set('page', '1');
+
+  const first = await apiFetch(`${pathname}?${params}`, {}, token);
+  const items = await first.json() as T[];
+  const totalPages = Number(first.headers.get('X-WP-TotalPages')) || 1;
+  for (let page = 2; page <= totalPages; page += 1) {
+    params.set('page', String(page));
+    items.push(...await apiJson<T[]>(`${pathname}?${params}`, {}, token));
+  }
+  return items;
+}

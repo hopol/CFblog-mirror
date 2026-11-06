@@ -432,6 +432,11 @@ moments.post('/:id/comments', optionalAuthMiddleware, async (c) => {
       return createWPError('moment_not_found', 'Moment not found', 404);
     }
 
+    const user = c.get('user') as JWTPayload | undefined;
+    if (moment.status !== 'publish' && !canViewNonPublicContent(user, Number(moment.author_id))) {
+      return createWPError('moment_not_found', 'Moment not found', 404);
+    }
+
     const body = await c.req.json();
     let {
       parent,

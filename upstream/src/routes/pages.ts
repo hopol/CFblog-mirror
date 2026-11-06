@@ -15,6 +15,26 @@ export function normalizeMenuPriority(value: unknown): number {
   return Math.max(0, Math.min(9999, Math.trunc(priority)));
 }
 
+async function resolvePageSlug(
+  db: D1Database,
+  title: string,
+  suppliedSlug: string,
+  currentId = 0
+): Promise<string | null> {
+  const baseSlug = suppliedSlug || generateSlug(title) || 'page';
+  let candidate = baseSlug;
+  let suffix = 1;
+
+  while (await db.prepare('SELECT id FROM posts WHERE slug = ? AND id != ?')
+    .bind(candidate, currentId)
+    .first<{ id: number }>()) {
+    if (suppliedSlug) return null;
+    candidate = `${baseSlug}-${suffix++}`;
+  }
+
+  return candidate;
+}
+
 function formatPageResponse(page: PageWithAuthorRow, baseUrl: string) {
   return {
     id: page.id,
@@ -169,18 +189,15 @@ pages.post('/', authMiddleware, requireRole('administrator', 'editor'), async (c
       return c.json({ code: 'rest_missing_callback_param', message: 'Missing parameter: title' }, 400);
     }
 
-    // Generate slug if not provided
-    const pageSlug = slug && slug.trim() ? slug.trim() : generateSlug(title);
+    if (slug != null && typeof slug !== 'string') {
+      return c.json({ code: 'rest_invalid_param', message: 'Slug must be a string.' }, 400);
+    }
 
-    // Check if slug already exists
-    const existingPage = await c.env.DB.prepare(`
-      SELECT id FROM posts WHERE slug = ? AND post_type = 'page'
-    `).bind(pageSlug).first<{ id: number }>();
-
-    if (existingPage) {
+    const pageSlug = await resolvePageSlug(c.env.DB, String(title), slug?.trim() || '');
+    if (pageSlug === null) {
       return c.json({
         code: 'rest_slug_exists',
-        message: 'A page with this slug already exists.'
+        message: 'A post or page with this slug already exists.'
       }, 400);
     }
 
@@ -264,21 +281,27 @@ pages.put('/:id', authMiddleware, requireRole('administrator', 'editor'), async 
       params.push(excerpt);
     }
 
-    if (slug !== undefined && slug.trim()) {
-      // Check if slug already exists for other pages
-      const slugExists = await c.env.DB.prepare(`
-        SELECT id FROM posts WHERE slug = ? AND id != ? AND post_type = 'page'
-      `).bind(slug.trim(), id).first<{ id: number }>();
+    if (slug != null && typeof slug !== 'string') {
+      return c.json({ code: 'rest_invalid_param', message: 'Slug must be a string.' }, 400);
+    }
 
-      if (slugExists) {
+    if (slug !== undefined || !existingPage.slug.trim()) {
+      const pageSlug = await resolvePageSlug(
+        c.env.DB,
+        String(title ?? existingPage.title),
+        slug?.trim() || '',
+        id
+      );
+
+      if (pageSlug === null) {
         return c.json({
           code: 'rest_slug_exists',
-          message: 'A page with this slug already exists.'
+          message: 'A post or page with this slug already exists.'
         }, 400);
       }
 
       updates.push('slug = ?');
-      params.push(slug.trim());
+      params.push(pageSlug);
     }
 
     if (status !== undefined) {

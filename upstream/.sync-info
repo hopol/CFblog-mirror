@@ -1,5 +1,5 @@
-commit=f330ab749c46937fa1352233744736068b641b7c
-timestamp=2026-10-16T06:31:21Z
+commit=2437b8ae810c77d9e1079d38ff055aed4c5af306
+timestamp=2026-11-06T08:40:29Z
 upstream_url=https://github.com/jkjoy/cfblog
 upstream_branch=main
-version=1.5.0
+version=2.0.2

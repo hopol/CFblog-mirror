@@ -19,7 +19,7 @@ import {
 } from 'naive-ui';
 import { computed, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { ApiError, apiFetch, apiJson } from '../api/client';
+import { ApiError, apiAllPages, apiFetch, apiJson } from '../api/client';
 import MarkdownEditor from '../components/MarkdownEditor.vue';
 import { useAdminI18n } from '../i18n';
 import { useAuthStore } from '../stores/auth';
@@ -175,14 +175,14 @@ async function loadDependencies() {
   try {
     if (isPost.value) {
       const [categoryData, tagData] = await Promise.all([
-        apiJson<TermItem[]>('/categories?per_page=100', {}, auth.token),
-        apiJson<TermItem[]>('/tags?per_page=100', {}, auth.token),
+        apiAllPages<TermItem>('/categories', auth.token),
+        apiAllPages<TermItem>('/tags', auth.token),
       ]);
       categories.value = categoryData;
       tags.value = tagData;
       return;
     }
-    parentPages.value = await apiJson<EditorContent[]>('/pages?per_page=100&status=all', {}, auth.token);
+    parentPages.value = await apiAllPages<EditorContent>('/pages?status=all', auth.token);
   } catch (error) {
     message.error(error instanceof ApiError ? error.message : t('editor.dependenciesFailed'));
   } finally {

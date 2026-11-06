@@ -5,6 +5,7 @@ import {
   getSiteSettings,
   formatCommentResponse,
   buildPaginationHeaders,
+  canViewNonPublicContent,
   createWPError,
   parsePageParam,
   parsePerPageParam,
@@ -24,6 +25,8 @@ const comments = new Hono<AppEnv>();
 interface CommentWithPost extends Comment {
   post_slug: string;
   post_title: string | null;
+  post_status: string;
+  post_author_id: number;
 }
 
 interface ParentCommentRecord {
@@ -39,6 +42,8 @@ interface PostRecord {
   slug: string;
   title: string;
   comment_status: string;
+  status: string;
+  author_id: number;
 }
 
 // GET /wp/v2/comments - List comments
@@ -65,7 +70,7 @@ comments.get('/', optionalAuthMiddleware, async (c) => {
     let query = `
       SELECT c.*, p.slug as post_slug, p.title as post_title
       FROM comments c
-      LEFT JOIN posts p ON c.post_id = p.id
+      INNER JOIN posts p ON c.post_id = p.id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -73,6 +78,12 @@ comments.get('/', optionalAuthMiddleware, async (c) => {
     // Only show approved comments to non-admins
     if (!isAdmin) {
       query += ` AND c.status = 'approved'`;
+      if (user) {
+        query += ` AND (p.status = 'publish' OR p.author_id = ?)`;
+        params.push(user.userId);
+      } else {
+        query += ` AND p.status = 'publish'`;
+      }
     } else if (status !== 'all') {
       query += ` AND c.status = ?`;
       params.push(status);
@@ -113,11 +124,17 @@ comments.get('/', optionalAuthMiddleware, async (c) => {
     const result = await c.env.DB.prepare(query).bind(...params).all<CommentWithPost>();
 
     // Get total count
-    let countQuery = `SELECT COUNT(*) as count FROM comments c WHERE 1=1`;
+    let countQuery = `SELECT COUNT(*) as count FROM comments c INNER JOIN posts p ON c.post_id = p.id WHERE 1=1`;
     const countParams: any[] = [];
 
     if (!isAdmin) {
       countQuery += ` AND c.status = 'approved'`;
+      if (user) {
+        countQuery += ` AND (p.status = 'publish' OR p.author_id = ?)`;
+        countParams.push(user.userId);
+      } else {
+        countQuery += ` AND p.status = 'publish'`;
+      }
     } else if (status !== 'all') {
       countQuery += ` AND c.status = ?`;
       countParams.push(status);
@@ -186,13 +203,18 @@ comments.get('/:id', optionalAuthMiddleware, async (c) => {
     const id = parseInt(c.req.param('id') || '');
 
     const comment = await c.env.DB.prepare(`
-      SELECT c.*, p.slug as post_slug, p.title as post_title
+      SELECT c.*, p.slug as post_slug, p.title as post_title,
+             p.status as post_status, p.author_id as post_author_id
       FROM comments c
-      LEFT JOIN posts p ON c.post_id = p.id
+      INNER JOIN posts p ON c.post_id = p.id
       WHERE c.id = ?
     `).bind(id).first<CommentWithPost>();
 
     if (!comment) {
+      return createWPError('rest_comment_invalid_id', 'Invalid comment ID.', 404);
+    }
+
+    if (comment.post_status !== 'publish' && !canViewNonPublicContent(user, comment.post_author_id)) {
       return createWPError('rest_comment_invalid_id', 'Invalid comment ID.', 404);
     }
 
@@ -302,12 +324,17 @@ comments.post('/', optionalAuthMiddleware, async (c) => {
 
     // Verify post exists and comments are open
     const postRecord = await c.env.DB.prepare(
-      'SELECT id, slug, title, comment_status FROM posts WHERE id = ? AND post_type = ?'
+      'SELECT id, slug, title, comment_status, status, author_id FROM posts WHERE id = ? AND post_type = ?'
     )
       .bind(postId, 'post')
       .first<PostRecord>();
 
     if (!postRecord) {
+      return createWPError('rest_comment_invalid_post_id', 'Invalid post ID.', 404);
+    }
+
+    const user = c.get('user') as JWTPayload | undefined;
+    if (postRecord.status !== 'publish' && !canViewNonPublicContent(user, postRecord.author_id)) {
       return createWPError('rest_comment_invalid_post_id', 'Invalid post ID.', 404);
     }
 

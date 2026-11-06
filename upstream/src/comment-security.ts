@@ -253,13 +253,13 @@ async function isRateLimited(
 
   const [ipCount, emailCount] = await Promise.all([
     authorIp
-      ? queryCount(env, table, 'author_ip = ? AND created_at >= ?', [authorIp, ipWindowStart])
+      ? queryCount(env, table, 'author_ip = ? AND julianday(created_at) >= julianday(?)', [authorIp, ipWindowStart])
       : Promise.resolve(0),
     normalizedEmail
       ? queryCount(
           env,
           table,
-          'LOWER(author_email) = ? AND created_at >= ?',
+          'LOWER(author_email) = ? AND julianday(created_at) >= julianday(?)',
           [normalizedEmail, emailWindowStart],
         )
       : Promise.resolve(0),
@@ -285,7 +285,7 @@ async function hasDuplicateComment(
   const count = await queryCount(
     env,
     table,
-    `${resourceColumn} = ? AND LOWER(author_email) = ? AND LOWER(TRIM(content)) = ? AND created_at >= ?`,
+    `${resourceColumn} = ? AND LOWER(author_email) = ? AND LOWER(TRIM(content)) = ? AND julianday(created_at) >= julianday(?)`,
     [resourceId, normalizedEmail, content.toLowerCase(), duplicateWindowStart],
   );
 

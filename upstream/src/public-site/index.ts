@@ -2931,40 +2931,20 @@ function renderBodyContent(content: string): string {
     allowedSchemes: ['http', 'https', 'mailto'],
     allowedSchemesByTag: {
       img: ['http', 'https']
-    }
+    },
+    transformTags: {
+      a: sanitizeHtml.simpleTransform('a', {
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      }),
+    },
   });
 
-  return forceArticleLinksToNewWindow(sanitized);
+  return sanitized;
 }
 
 function renderCommentContent(content: string): string {
   return escapeHtml(content).replace(/\n/g, '<br>');
-}
-
-function forceArticleLinksToNewWindow(html: string): string {
-  return html.replace(/<a\b([^>]*)>/gi, (_match, attrs: string) => {
-    let nextAttrs = attrs;
-
-    if (/\btarget\s*=/.test(nextAttrs)) {
-      nextAttrs = nextAttrs.replace(
-        /\btarget\s*=\s*(".*?"|'.*?'|[^\s>]+)/i,
-        'target="_blank"',
-      );
-    } else {
-      nextAttrs += ' target="_blank"';
-    }
-
-    if (/\brel\s*=/.test(nextAttrs)) {
-      nextAttrs = nextAttrs.replace(
-        /\brel\s*=\s*(".*?"|'.*?'|[^\s>]+)/i,
-        'rel="noopener noreferrer"',
-      );
-    } else {
-      nextAttrs += ' rel="noopener noreferrer"';
-    }
-
-    return `<a${nextAttrs}>`;
-  });
 }
 
 function parseMediaUrls(mediaUrls: string | null): string[] {
